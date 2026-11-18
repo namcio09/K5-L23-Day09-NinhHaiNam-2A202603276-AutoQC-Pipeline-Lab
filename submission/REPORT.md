@@ -38,7 +38,16 @@ Hai điểm mù có số liệu: (1) `DUP_IMAGE_NEAR` ở ngưỡng 16 có recal
 
 ## 5. Train: raw vs clean (Colab)
 
-**Chưa chạy.** Tôi sẽ chạy phần so sánh trên Google Colab với GPU T4 theo `notebooks/day09_train_compare.ipynb`, vì máy local không dùng để train. Sau khi chạy đủ 2 seed cho raw và clean, tôi sẽ bổ sung bảng từ `submission/results/comparison.md` và so chênh lệch mAP với độ lệch giữa các seed. Hiện chưa có số liệu nên chưa kết luận clean tốt hơn raw.
+Tôi chạy `yolo26n.pt` trong 20 epoch với hai seed (0, 1), cùng cấu hình train/val/test cho raw và clean trên Colab T4. Bảng dưới được sinh từ `submission/results/comparison.md`.
+
+| Biến thể | Ảnh train | Seed | mAP50 (TB ± độ lệch) | mAP50–95 (TB ± độ lệch) | Precision (TB ± độ lệch) | Recall (TB ± độ lệch) |
+|---|---:|---|---:|---:|---:|---:|
+| raw | 224 | 0, 1 | 0.726 ± 0.000 | 0.512 ± 0.004 | 0.764 ± 0.061 | 0.649 ± 0.028 |
+| clean | 193 | 0, 1 | 0.730 ± 0.001 | 0.501 ± 0.001 | 0.800 ± 0.019 | 0.624 ± 0.012 |
+
+Chênh mAP50 (clean − raw) là **+0.0043**. Mức chênh này lớn hơn độ lệch chuẩn trong từng nhóm seed (raw 0.0002, clean 0.0014), nhưng mới có hai seed và tập test chỉ có 100 ảnh nên tôi chưa kết luận clean tốt hơn nói chung. mAP50–95 của clean thấp hơn 0.011; precision cao hơn nhưng recall thấp hơn raw.
+
+Hai khả năng cần kiểm tra thêm: (1) raw có ảnh rò rỉ vào val/test và ảnh trùng, nên kết quả raw có thể bị nâng lên; báo cáo intake ghi 11 `LEAK_TEST`, 8 `DUP_IMAGE_EXACT` và 7 `DUP_IMAGE_NEAR`. Có thể đối chiếu hash train/test và đánh giá thêm trên một tập test độc lập, không dùng tập test hiện tại để sửa nhãn hoặc chọn ngưỡng. (2) clean vẫn có thể còn lỗi nhãn ngữ nghĩa: vòng duyệt chỉ xử lý tối đa 80 ảnh và vòng cuối còn cảnh báo ở 34 ảnh; có thể kiểm tra bằng một vòng review độc lập trên các nhãn còn nghi ngờ và một tập gold lớn hơn.
 
 ## 6. Quyết định và ghi chú AI
 

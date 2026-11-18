@@ -40,5 +40,91 @@ from ..model_cache import get_preds  # noqa: F401
 
 
 def run(ds, cfg, preds=None):
-    # TODO
-    raise NotImplementedError("check second_opinion chưa làm")
+    if preds is None:
+        preds = get_preds(ds, cfg, "checker")
+
+    rules = cfg["second_opinion"]
+    conf_threshold = rules["conf"]
+    min_area_px = rules["min_area_px"]
+    fp_conf = rules["fp_conf"]
+    iou_missing = rules["iou_missing"]
+    iou_match = rules["iou_match"]
+    iou_loose = rules["iou_loose"]
+    issues = []
+
+    for image_path in ds.image_files():
+        stem = image_path.stem
+        if stem not in preds:
+            continue
+        label_lines = ds.read_label_lines(stem)
+        if label_lines is None:
+            continue
+
+        # Giữ lại số dòng gốc để cảnh báo box nhãn thừa trỏ đúng vị trí trong file.
+        labels = []
+        for line_no, text in label_lines:
+            try:
+                class_id, cx, cy, box_w, box_h = parse_yolo_line(text)
+            except ValueError:
+                continue
+            if not 0 <= class_id < len(ds.classes):
+                continue
+            labels.append((line_no, class_id, (cx, cy, box_w, box_h)))
+
+        # Các dự đoán dùng để so thiếu/sai/lỏng phải đạt cả ngưỡng tin cậy và kích thước.
+        size = ds.image_size(stem)
+        main_preds = []
+        all_fp_preds = []
+        for row in preds[stem]:
+            try:
+                class_id, confidence, cx, cy, box_w, box_h = row
+                class_id = int(class_id)
+                confidence = float(confidence)
+                box = (float(cx), float(cy), float(box_w), float(box_h))
+            except (TypeError, ValueError):
+                continue
+            if box[2] <= 0 or box[3] <= 0:
+                continue
+            if confidence >= fp_conf:
+                all_fp_preds.append((class_id, confidence, box))
+            area_px = box[2] * box[3] * size[0] * size[1] if size else 0
+            if confidence >= conf_threshold and size is not None and area_px >= min_area_px:
+                main_preds.append((class_id, confidence, box))
+
+        # Ý kiến model theo đúng thứ tự dự đoán trong cache.
+        for pred_class, confidence, pred_box in main_preds:
+            candidates = [
+                (label_class, iou_xywh(pred_box, label_box))
+                for _, label_class, label_box in labels
+                if iou_xywh(pred_box, label_box) >= iou_missing
+            ]
+            if not candidates:
+                issues.append(Issue("second_opinion", WARN, "POSSIBLE_MISSING", stem,
+                                    "Model thấy vật thể nhưng không tìm thấy box nhãn khớp.",
+                                    extra={"conf": confidence}))
+                continue
+
+            same_class = [iou for label_class, iou in candidates if label_class == pred_class]
+            if same_class:
+                best_iou = max(same_class)
+                if best_iou < iou_loose:
+                    issues.append(Issue("second_opinion", WARN, "POSSIBLE_LOOSE_BOX", stem,
+                                        "Box nhãn cùng lớp nhưng lệch hoặc rộng hơn dự đoán model.",
+                                        extra={"conf": confidence, "iou": best_iou}))
+                continue
+
+            best_other_iou = max(iou for _, iou in candidates)
+            if best_other_iou >= iou_match:
+                issues.append(Issue("second_opinion", WARN, "POSSIBLE_WRONG_CLASS", stem,
+                                    "Model và nhãn có vẻ chỉ cùng vật thể nhưng khác lớp.",
+                                    extra={"conf": confidence, "iou": best_other_iou}))
+
+        # Box nhãn không khớp bất kỳ dự đoán đủ tin cậy nào là ứng viên false positive.
+        for line_no, _, label_box in labels:
+            best_iou = max((iou_xywh(label_box, pred_box) for _, _, pred_box in all_fp_preds), default=0.0)
+            if best_iou < iou_missing:
+                issues.append(Issue("second_opinion", WARN, "POSSIBLE_FALSE_POS", stem,
+                                    "Box nhãn không khớp với dự đoán nào của model.", line_no,
+                                    {"iou": best_iou}))
+
+    return issues
